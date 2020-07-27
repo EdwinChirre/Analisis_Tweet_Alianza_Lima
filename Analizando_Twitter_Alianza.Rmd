@@ -1,0 +1,290 @@
+---
+title: "Analizando #AlianzaLima en Twitter"
+author: "EdwinChirre"
+date: "26 de julio de 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objetivo
+
+Se busca analizar los temas más relevantes que han estado comentando en Twitter los diarios deportivos y los hinchas en la primera quincena de Julio 2020.
+
+1. Se hará una nube de palabras de los tweets con referencia de Alianza para enteder que pasó con el club en la primera quincena de Julio
+
+2. Se asociará las palabras y se creará tópicos referentes a los temas y colocaré un título a cada tópico
+
+
+## Datos
+
+Los datos se obtienen de hacer scrapping del #AlianzaLima en twitter
+
+## Cargando las librerías
+
+```{r librería,message = FALSE}
+
+library(dplyr)
+library(tidyverse)
+
+library(lubridate)
+library(readr)
+library(rtweet)
+library(lubridate)
+library(igraph)
+
+library(ggraph)
+library(tm)
+library(SnowballC)
+library(wordcloud2)
+library(readr)
+
+```
+
+
+## Cargando  la data
+
+Se tiene los twits de la quincena de Julio 2020
+
+```{r data}
+
+alianza <- readRDS("../Alianza_0207_1107_2020.rds")
+
+alianza <- alianza %>% mutate(created_at = with_tz(created_at, tz = "America/Lima") )
+
+
+head(alianza)
+
+summary(alianza$created_at)
+print("El Periodo de anális es del 2 al 11 de Julio")
+
+```
+
+
+## Analizando los tweets
+
+#Me quedo solo con los tweets y se puede observar que hay mucho por procesar los textos
+
+```{r variables}
+
+tweets <- alianza[,c(4,5)]
+
+
+```
+
+### a. Limpiando texto
+
+Se eliminarán tildes, signos de puntuaciones, etc
+
+```{r limpieza}
+
+# Quitar las tildes
+tweets$text <- chartr('áéíóúñ','aeioun',tweets$text) 
+tweets$text <- iconv(tweets$text, to = "ASCII", sub = "")  
+
+# Eliminando los"RT" (retweet) y usernames 
+tweets$text <- gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", tweets$text)  
+
+# Eliminando los links html
+tweets$text = gsub("http.+ |http.+$", " ", tweets$text)  
+tweets$text = gsub("http[[:alnum:]]*", "", tweets$text)
+
+#Elminando los signos de puntuacion
+tweets$text = gsub("[[:punct:]]", " ", tweets$text)  
+
+# Eliminando los tabs
+tweets$text = gsub("[ |\t]{2,}", " ", tweets$text)  
+
+# Leading blanks
+tweets$text = gsub("^ ", "", tweets$text)  
+
+# Lagging blanks
+tweets$text = gsub(" $", "", tweets$text)  
+
+# General spaces 
+tweets$text = gsub(" +", " ", tweets$text) 
+
+# saltos de linea y tabulaciones
+tweets$text = gsub("[[:cntrl:]]", " ", tweets$text) 
+
+writeLines(as.character(tweets$text[[1500]]))
+
+```
+
+### b. Limpiando texto 2
+
+Se pondra en minúscula el texto y se eliminarán todos los stopwords. También se hará una limpieza adicional, donde se quitarán los signos de puntuación, números
+```{r limpieza 2}
+tweets$text = tolower(tweets$text) #convertimos todo a minÃºsculas
+tweets$text = removeWords(tweets$text, words = stopwords("spanish"))
+tweets$text = removePunctuation(tweets$text)
+tweets$text = removeNumbers(tweets$text)
+tweets$text = stripWhitespace(tweets$text)
+
+writeLines(as.character(tweets$text[[1500]]))
+
+
+tweets2 <- tweets
+
+tweets <- tweets$text
+
+tweets = unique(tweets)
+
+```
+
+## Conviertiendo los tweets a un Corpus
+
+```{r corpus}
+
+corpus <- Corpus(VectorSource(tweets))
+
+```
+
+### a. Stemming
+
+Haré stemming al corpus
+
+```{r limpieza 3}
+
+
+#Stemming
+corpus <- tm_map(corpus, stemDocument)
+
+#Elimino algunos hashtag relacionados con el club y algunas palabras que se repiten mucho y no generan ruido
+corpus = tm_map(corpus, removeWords, c("alianza","lima",
+                                       "alianzalima",
+                                       "mas",
+                                       "clubalofici",
+                                       "si no"))
+
+writeLines(as.character(corpus[[1500]]))
+
+```
+
+## Creando la nube de palabras
+
+```{r nube}
+dtm = DocumentTermMatrix(corpus)
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+
+
+doc.length = apply(dtm, 1, sum)
+dtm = dtm[doc.length > 0,]
+dtm
+
+freq = colSums(as.matrix(dtm))
+length(freq)
+
+
+plot = data.frame(words = names(freq), count = freq)
+plot = subset(plot, plot$count > 20) 
+
+wordcloud2(data=plot, color='random-dark',shape = "circle",size = .4)
+
+```
+
+# Analizando bigramas
+
+```{r bigrama}
+library(tidytext)
+
+
+bigrama_alianza <- tweets2 %>% 
+     select_if(~ !is.list(.)) %>%
+  unnest_tokens(bigrama, text, token = "ngrams", n = 2) %>%
+  select(screen_name, bigrama)
+
+
+#Cargando lista de stopwords para eliminar
+library(readxl)
+stopwords_es_1 = read_excel("../../Clase 3/CustomStopWords.xlsx")
+names(stopwords_es_1) = c("Token","Fuente")
+stopwords_es_2 = tibble(Token=tm::stopwords(kind = "es"), Fuente="tm")
+stopwords_es_3 = tibble(Token=stopwords::stopwords(language = "es", source = "stopwords-iso")
+                        , Fuente="stopwords-iso")
+stopwords_es_4 = tibble(Token=stopwords::stopwords(language = "es", source = "snowball")
+                        , Fuente="snowball")
+stopwords_es = rbind(stopwords_es_1, stopwords_es_2, stopwords_es_3, stopwords_es_4)
+stopwords_es = stopwords_es[!duplicated(stopwords_es$Token),]
+remove(stopwords_es_1, stopwords_es_2, stopwords_es_3, stopwords_es_4)
+
+
+bigrama_alianza = bigrama_alianza %>%
+  separate(bigrama, c("palabra1", "palabra2"), sep = " ") %>%
+  filter(!palabra1 %in% c(stopwords_es$Token,"alianza","lima",
+                                       "alianzalima",
+                                       "mas",
+                                       "clubalofici",
+                                       "si no",
+                                        "the")) %>%
+  
+  filter(!palabra2 %in% c(stopwords_es$Token, "alianza","lima",
+                                       "alianzalima",
+                                       "mas",
+                                       "clubalofici",
+                                       "si no","the"))
+
+bigrama_grafo_alianza = bigrama_alianza %>%
+  count(palabra1, palabra2, sort = TRUE) %>% 
+  filter(n >= 4) %>%
+  graph_from_data_frame()
+
+bigrama_grafo_alianza
+
+# a<- as.data.frame(table(tweets2$screen_name))
+# a <- a[order(-a$Freq),]
+# head(a,70)
+
+
+```
+
+# Analizando Tópicos
+
+```{r topicos}
+
+ini <- Sys.time()
+
+library(topicmodels)
+
+
+#LDA model with 6 topics selected
+lda_6 = LDA(dtm, k = 6, method = 'Gibbs', 
+            control = list(nstart = 5, seed = list(1505,99,36,56,88), best = TRUE, 
+                           thin = 500, burnin = 4000, iter = 2000))
+fin <- Sys.time()
+
+tespera <- fin - ini
+tespera
+
+#Top 10 terms or words under each topic
+top10terms_6 = as.matrix(terms(lda_6,10))
+
+top10terms_6 %>% View()
+
+
+topi_frame <-  as.data.frame(top10terms_6)
+
+names(topi_frame) <- c("Retiro de Claudio Pizarro",
+                       "Jonathan Herrera rechaza oferta de Alianza",
+                       "Nuevo refuerzo - Patricio Rubio",
+                       "Disputa sobre único Tetracampéon Peruano",
+                       "Alianza, equipo más popular de Perú",
+                       "Primer entrenamiento de Mario Salas después de dar positivo al Covid")
+
+topi_frame 
+
+```
+
+# Conclusión
+
+Basado en la nube de palabras y los análisis de tópicos, podemos identificar de qué se hablo del Club Alianza Lima la primera quincena de Julio:
+
+1. El retiro de Claudio Pizarrro, gran representante peruano en el fútbol Aleman e hincha de Alianza Lima
+2. Jonathan Herrera estuvo muy cerca de ser jugador de Alianza Lima pero al último minuto decidió jugar por San Lorenzo
+3. Debido a la caída del fichaje de Jonathan Herrera, Alianza fue a la carga de Patricio Rubio (en ese momento era un rumor, pero hoy en día - 26 de Julio - ya fichó por el club y llega mañana a Perú)
+4. En la primera semana también se estuvo debatiendo quién es el único tetracampeón del fútbol peruano. El club Universitario (principal rival de Alianza) se adjudicó campeón 1934, pero hay evidencia que eso no pasó (adjunto url: https://diariocorreo.pe/deportes/alianza-lima-es-el-unico-tetracampeon-del-fu-50535/)
+5. Alianza Lima siempre se ha caracterizado por ser el equipo del pueblo y ser el más grande del Perú y eso siempre lo tienen presente los hinchas del club en cada tweet
+6. Mario Salas, nuevo técnico de Alianza, se incorporó recién a los entrenamientos con el plante, debido a que estuvo en cuarentena por estar con Covid.
